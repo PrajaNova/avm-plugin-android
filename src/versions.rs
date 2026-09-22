@@ -13,7 +13,11 @@ pub fn available_versions(query: ToolVersionQuery) -> Result<Vec<ToolVersion>> {
     levels.sort_unstable_by(|a, b| b.cmp(a));
 
     let filtered: Vec<ApiLevel> = match query {
-        ToolVersionQuery::Recent => levels.into_iter().take(10).collect(),
+        // The interactive picker (avm-cli) pages 10 at a time with real
+        // up/down scrolling — capping the source list at exactly one page
+        // left nothing to scroll into. 30 gives ~3 pages (in practice all
+        // stable levels Google has ever shipped fit well under this).
+        ToolVersionQuery::Recent => levels.into_iter().take(30).collect(),
         ToolVersionQuery::Latest => levels.into_iter().take(1).collect(),
         ToolVersionQuery::Major(major) => {
             levels.into_iter().filter(|lvl| lvl.major == major).collect()
