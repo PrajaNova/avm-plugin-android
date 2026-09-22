@@ -1,3 +1,4 @@
+pub mod avd;
 mod install;
 mod versions;
 

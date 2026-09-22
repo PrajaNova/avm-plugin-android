@@ -30,6 +30,11 @@ building/publishing this repo itself.
 - **Working `adb`, `sdkmanager`, `avdmanager`, `emulator`** — installing a
   version also drops small wrapper scripts for each on `PATH` so they see
   the right `ANDROID_HOME` without you exporting anything by hand.
+- **`avm android avd` — guided AVD (emulator) management** — `list`,
+  `create`, `start`, `delete`, without needing to know `avdmanager`'s
+  package-name syntax or which system image a given API level maps to;
+  `create` picks an API level and device profile interactively and installs
+  the matching system image automatically if it isn't already there.
 
 ## Requirements
 
@@ -55,57 +60,58 @@ Once installed (`avm plugin add android`), everything is under `avm android`:
 | `avm android install <version> --global` | Install + pin globally only |
 | `avm android install <version> --no-pin` | Install without touching any pin |
 | `avm android uninstall <version>` | Remove a managed version |
+| `avm android avd list` | Show AVDs (emulators) for the active version's SDK |
+| `avm android avd create [name]` | Interactive wizard: pick an API level and device, auto-installs the matching system image if needed, creates the AVD |
+| `avm android avd create <name> --api <level> [--device <id>]` | Same, non-interactive — for scripting |
+| `avm android avd start <name>` | Launch the emulator with that AVD |
+| `avm android avd delete <name>` | Remove an AVD |
 
 `<version>` is an API level (`36`, `36.1`, `34`, ...) or `latest`.
+
+Build-tools and system-image packages are resolved against the real SDK
+repository listing, not guessed from the API string — neither follows the
+platform's `major.minor` numbering, and a preview/beta level (`37.2`) often
+has no exact package yet; the closest real one is picked automatically.
 
 Useful env overrides for `install`:
 
 | Variable | Purpose |
 | --- | --- |
-| `ANDROID_BUILD_TOOLS_VERSION` | Override the build-tools version installed alongside the platform (defaults to `<level>.0.0`) |
+| `ANDROID_BUILD_TOOLS_VERSION` | Force a specific build-tools version instead of the auto-resolved closest match |
+| `ANDROID_SYSTEM_IMAGE_API` | Force a specific system-image API id (e.g. `36.1`) instead of the auto-resolved closest match |
 | `ANDROID_CMDLINE_TOOLS_BUILD` | Pin a specific cmdline-tools build number if Google's default one 404s |
 | `AVM_ANDROID_CURL_TIMEOUT` / `AVM_ANDROID_UNZIP_TIMEOUT` / `AVM_ANDROID_SDKMANAGER_TIMEOUT` | Seconds — extend for slow links (the SDK pull is several GB) |
 
 ## Emulators (AVDs)
 
-Installing a version already pulls a matching system image
-(`system-images;android-<level>;google_apis;<abi>`), the `emulator`
-package, and `avdmanager` — so once `avm android install <level>` has run,
-you can create and run an emulator with no further downloads:
+The easy way — `avm android avd`:
 
 ```bash
-# 1. Install a version (also grabs its system image + emulator)
-avm android install 34
-avm android use 34
+avm android use 36                      # pick which SDK avd commands operate against
 
-# 2. See what system image landed (matches the installed API level/abi)
-sdkmanager --list_installed | grep system-images
+avm android avd create                  # interactive: pick API level + device, auto-installs
+                                         # the system image if it isn't there yet
+avm android avd create pixel-36 --api 36 --device pixel_6   # same, non-interactive
 
-# 3. Create an AVD from it
-avdmanager create avd \
-  --name pixel-34 \
-  --package "system-images;android-34;google_apis;$(uname -m | grep -q arm64 && echo arm64-v8a || echo x86_64)" \
-  --device "pixel_6"
-
-# 4. Run it
-emulator -avd pixel-34
-
-# List / delete AVDs
-avdmanager list avd
-avdmanager delete avd --name pixel-34
+avm android avd list                    # see what you've got, and flag any with a missing image
+avm android avd start pixel-36          # launch the emulator
+avm android avd delete pixel-36         # remove it
 ```
 
-`--device "pixel_6"` picks a device profile from `avdmanager list device`
-— swap it for any other profile name, or drop the flag for a generic
-default. `adb` (also on `PATH` once a version is selected) talks to
-whatever's running: `adb devices`, `adb shell`, `adb install app.apk`.
+`avd create` always operates against whichever android version `avm
+android use` last selected (local pin, else global) — that's the SDK the
+system image gets installed into and the AVD gets created against.
 
-None of this is a separate `avm` command — `sdkmanager`, `avdmanager`,
-`emulator`, and `adb` are real Android SDK tools that land on `PATH`
-(via avm's shims, with `ANDROID_HOME` already pointed at the right SDK)
-once you've selected a version. avm's job stops at "these tools exist and
-see the right SDK" — AVD creation/management is standard Android tooling
-from there.
+The raw tools are still there if you want them directly — `adb`,
+`sdkmanager`, `avdmanager`, and `emulator` land on `PATH` (via avm's shims,
+with `ANDROID_HOME` already pointed at the right SDK) once a version is
+selected, same as any other Android SDK install:
+
+```bash
+avdmanager list avd
+adb devices
+adb install app.apk
+```
 
 ## Environment
 

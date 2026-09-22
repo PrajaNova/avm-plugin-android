@@ -1,6 +1,6 @@
 [package]
 name = "avm-plugin-android"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "avm native provider for the Android SDK (cmdline-tools, platform-tools, sdkmanager). Speaks avm's plugin protocol (https://github.com/PrajaNova/avm)."
 license = "MIT"
@@ -11,3 +11,4 @@ avm-plugin-api = { git = "https://github.com/PrajaNova/avm" }
 anyhow = "1.0"
 serde_json = "1.0"
 wait-timeout = "0.2"
+inquire = { version = "0.9.4", default-features = false, features = ["crossterm"] }

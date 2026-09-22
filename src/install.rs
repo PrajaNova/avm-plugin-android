@@ -13,7 +13,7 @@ const UNZIP_TIMEOUT_MS: u64 = 60_000;
 const SDKMANAGER_TIMEOUT_MS: u64 = 1_800_000;
 const SDKMANAGER_LIST_TIMEOUT_MS: u64 = 60_000;
 
-fn env_timeout_ms(var: &str, default_ms: u64) -> u64 {
+pub(crate) fn env_timeout_ms(var: &str, default_ms: u64) -> u64 {
     std::env::var(var)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -21,7 +21,7 @@ fn env_timeout_ms(var: &str, default_ms: u64) -> u64 {
         .unwrap_or(default_ms)
 }
 
-fn run_with_timeout(mut cmd: Command, ms: u64, label: &str, env_var: &str) -> Result<()> {
+pub(crate) fn run_with_timeout(mut cmd: Command, ms: u64, label: &str, env_var: &str) -> Result<()> {
     let child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn {label}"))?;
@@ -54,7 +54,7 @@ fn wait_with_timeout(
     Ok(())
 }
 
-fn home_dir() -> Result<PathBuf> {
+pub(crate) fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("HOME not set"))
@@ -151,7 +151,7 @@ fn extract_cmdline_tools(zip_path: &Path, tmp: &Path, sdk: &Path) -> Result<()> 
     Ok(())
 }
 
-fn accept_licenses(sdkmanager: &Path, sdk: &Path, java_home: Option<&Path>) -> Result<()> {
+pub(crate) fn accept_licenses(sdkmanager: &Path, sdk: &Path, java_home: Option<&Path>) -> Result<()> {
     let mut cmd = Command::new(sdkmanager);
     cmd.arg(format!("--sdk_root={}", sdk.display())).arg("--licenses");
     if let Some(java_home) = java_home {
@@ -263,7 +263,7 @@ fn resolve_build_tools_version(listing: &str, api: &str) -> Result<String> {
 /// doesn't need a newer image than the platform being targeted), then the
 /// closest one above, then the highest available for any major as a last
 /// resort.
-fn resolve_system_image_id(listing: &str, api: &str) -> Result<String> {
+pub(crate) fn resolve_system_image_id(listing: &str, api: &str) -> Result<String> {
     if let Ok(id) = std::env::var("ANDROID_SYSTEM_IMAGE_API") {
         return Ok(id);
     }
@@ -335,7 +335,7 @@ fn parse_two_part(s: &str) -> Option<(u64, u64)> {
     Some((major, minor))
 }
 
-fn list_packages(sdkmanager: &Path, sdk: &Path, java_home: Option<&Path>) -> Result<String> {
+pub(crate) fn list_packages(sdkmanager: &Path, sdk: &Path, java_home: Option<&Path>) -> Result<String> {
     let mut cmd = Command::new(sdkmanager);
     cmd.arg(format!("--sdk_root={}", sdk.display())).arg("--list");
     if let Some(java_home) = java_home {
@@ -420,7 +420,7 @@ fn cmdline_tools_url() -> Result<String> {
     ))
 }
 
-fn sysimg_abi() -> &'static str {
+pub(crate) fn sysimg_abi() -> &'static str {
     match std::env::consts::ARCH {
         "aarch64" => "arm64-v8a",
         _ => "x86_64",
@@ -432,7 +432,7 @@ fn sysimg_abi() -> &'static str {
 /// avm-managed JDK is used instead (preferring the pinned version from
 /// `~/.avm.json`'s `tools.java`, else the first one found), and its home
 /// returned so the caller can point the child process at it.
-fn require_jdk() -> Result<Option<PathBuf>> {
+pub(crate) fn require_jdk() -> Result<Option<PathBuf>> {
     let system_java_works = Command::new("java")
         .arg("-version")
         .stdout(Stdio::null())
