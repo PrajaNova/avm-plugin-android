@@ -66,6 +66,47 @@ Useful env overrides for `install`:
 | `ANDROID_CMDLINE_TOOLS_BUILD` | Pin a specific cmdline-tools build number if Google's default one 404s |
 | `AVM_ANDROID_CURL_TIMEOUT` / `AVM_ANDROID_UNZIP_TIMEOUT` / `AVM_ANDROID_SDKMANAGER_TIMEOUT` | Seconds — extend for slow links (the SDK pull is several GB) |
 
+## Emulators (AVDs)
+
+Installing a version already pulls a matching system image
+(`system-images;android-<level>;google_apis;<abi>`), the `emulator`
+package, and `avdmanager` — so once `avm android install <level>` has run,
+you can create and run an emulator with no further downloads:
+
+```bash
+# 1. Install a version (also grabs its system image + emulator)
+avm android install 34
+avm android use 34
+
+# 2. See what system image landed (matches the installed API level/abi)
+sdkmanager --list_installed | grep system-images
+
+# 3. Create an AVD from it
+avdmanager create avd \
+  --name pixel-34 \
+  --package "system-images;android-34;google_apis;$(uname -m | grep -q arm64 && echo arm64-v8a || echo x86_64)" \
+  --device "pixel_6"
+
+# 4. Run it
+emulator -avd pixel-34
+
+# List / delete AVDs
+avdmanager list avd
+avdmanager delete avd --name pixel-34
+```
+
+`--device "pixel_6"` picks a device profile from `avdmanager list device`
+— swap it for any other profile name, or drop the flag for a generic
+default. `adb` (also on `PATH` once a version is selected) talks to
+whatever's running: `adb devices`, `adb shell`, `adb install app.apk`.
+
+None of this is a separate `avm` command — `sdkmanager`, `avdmanager`,
+`emulator`, and `adb` are real Android SDK tools that land on `PATH`
+(via avm's shims, with `ANDROID_HOME` already pointed at the right SDK)
+once you've selected a version. avm's job stops at "these tools exist and
+see the right SDK" — AVD creation/management is standard Android tooling
+from there.
+
 ## Environment
 
 `ANDROID_HOME` and `ANDROID_SDK_ROOT` are exported automatically to the
@@ -81,7 +122,7 @@ and `darwin_arm64`, and publishes them as a GitHub Release — that's what
 [`avm-marketplace`](https://github.com/PrajaNova/avm-marketplace) for the
 registry entry that points at this repo, and the main
 [avm repo](https://github.com/PrajaNova/avm)'s
-`docs/migration/PLUGIN_PROTOCOL.md` for the full wire protocol this
+`docs/plugins/CREATING_A_PLUGIN.md` for the full wire protocol this
 executable speaks (`manifest`, `versions`, `is-installed`,
 `installed-versions`, `executable-path`, `env-vars`, `install`,
 `uninstall`).
