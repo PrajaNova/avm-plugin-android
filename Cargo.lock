@@ -21,7 +21,7 @@ dependencies = [
 [[package]]
 name = "avm-plugin-api"
 version = "0.2.8"
-source = "git+https://github.com/PrajaNova/avm?branch=feat%2Fplugin-protocol-native-providers#3b35c93b1822d5a3969a2ddcfe767468bf80885d"
+source = "git+https://github.com/PrajaNova/avm#1359fa4fa29d409e29292548fcf1f7659b9ff9f1"
 dependencies = [
  "anyhow",
  "serde",
