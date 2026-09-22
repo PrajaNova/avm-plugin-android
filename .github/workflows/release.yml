@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target_os: linux
+            target_arch: amd64
+          - os: ubuntu-24.04-arm
+            target_os: linux
+            target_arch: arm64
+          - os: macos-latest
+            target_os: darwin
+            target_arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Create release archive
+        shell: bash
+        run: |
+          archive="avm-plugin-android_${{ matrix.target_os }}_${{ matrix.target_arch }}.tar.gz"
+          mkdir -p dist
+          cp target/release/avm-plugin-android dist/avm-plugin-android
+          tar -C dist -czf "$archive" avm-plugin-android
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
