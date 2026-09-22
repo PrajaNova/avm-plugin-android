@@ -72,13 +72,19 @@ pub fn install_android(version: &str) -> Result<()> {
     let target = tools_root()?.join(version);
     let sdk = sdk_dir(version)?;
 
-    // The platform package only exists once `install_packages` below has
-    // actually succeeded — unlike the presence of `sdkmanager` itself, which
-    // a previous *failed* attempt can already have left behind (cmdline-tools
-    // extracts fine, then a package fails to resolve). Checking for the
-    // platform, not just the tool that installs it, keeps a failed install
-    // from being mistaken for a completed one on retry.
-    if sdk.join("platforms").join(format!("android-{version}")).exists() {
+    // Both the platform package AND a real (non-truncated) system image are
+    // required before this counts as done. `install_packages` installs
+    // several packages in one sdkmanager call; if a prior attempt was
+    // interrupted partway (network hiccup, process killed) it's entirely
+    // possible for `platforms/` to have landed while `system-images/` is
+    // left with only a package.xml and no actual system.img — sdkmanager
+    // itself doesn't treat that as broken (the directory exists), but
+    // avdmanager refuses to create an AVD from it. Checking for a real
+    // system.img, not just the platform directory, keeps that kind of
+    // partial install from being mistaken for a completed one on retry.
+    if sdk.join("platforms").join(format!("android-{version}")).exists()
+        && has_complete_system_image(&sdk)
+    {
         write_wrappers(&target, &sdk)?;
         return Ok(());
     }
@@ -106,6 +112,32 @@ pub fn install_android(version: &str) -> Result<()> {
 
     write_wrappers(&target, &sdk)?;
     Ok(())
+}
+
+/// True if `sdk/system-images/*/google_apis/*/system.img` exists for at
+/// least one installed system image — a directory existing under
+/// `system-images/` isn't enough, since sdkmanager can leave one behind with
+/// only `package.xml`/`vendor.img` from an interrupted install.
+fn has_complete_system_image(sdk: &Path) -> bool {
+    let Ok(api_dirs) = fs::read_dir(sdk.join("system-images")) else {
+        return false;
+    };
+    for api_dir in api_dirs.flatten() {
+        let Ok(vendor_dirs) = fs::read_dir(api_dir.path()) else {
+            continue;
+        };
+        for vendor_dir in vendor_dirs.flatten() {
+            let Ok(abi_dirs) = fs::read_dir(vendor_dir.path()) else {
+                continue;
+            };
+            for abi_dir in abi_dirs.flatten() {
+                if abi_dir.path().join("system.img").exists() {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn download_cmdline_tools(destination: &Path) -> Result<()> {
@@ -187,6 +219,21 @@ fn install_packages(sdkmanager: &Path, sdk: &Path, java_home: Option<&Path>, api
     let listing = list_packages(sdkmanager, sdk, java_home)?;
     let build_tools = resolve_build_tools_version(&listing, api)?;
     let system_image = resolve_system_image_id(&listing, api)?;
+
+    // sdkmanager tracks "installed" by package.xml's presence, not by
+    // whether the package's real content (system.img) is actually there —
+    // an interrupted earlier install can leave package.xml behind with the
+    // image itself missing, and re-running sdkmanager on that package is
+    // then a silent no-op. Force a real re-fetch by clearing it first.
+    let image_dir = sdk
+        .join("system-images")
+        .join(format!("android-{system_image}"))
+        .join("google_apis")
+        .join(sysimg_abi());
+    if image_dir.exists() && !image_dir.join("system.img").exists() {
+        fs::remove_dir_all(&image_dir)
+            .with_context(|| format!("failed to remove incomplete {}", image_dir.display()))?;
+    }
 
     let mut cmd = Command::new(sdkmanager);
     cmd.arg(format!("--sdk_root={}", sdk.display()))

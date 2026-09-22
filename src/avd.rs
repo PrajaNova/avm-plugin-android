@@ -166,15 +166,31 @@ fn cmd_create(args: &[String]) -> Result<()> {
     let system_image = install::resolve_system_image_id(&listing, &api)?;
     let package = format!("system-images;android-{system_image};google_apis;{}", sysimg_abi());
 
-    if !active
+    // `system.img` specifically, not just the package directory — sdkmanager
+    // writes package.xml (and sometimes a partial vendor.img) before the
+    // actual image, so a directory that exists but was left behind by an
+    // interrupted install still has no system.img. avdmanager refuses to
+    // create an AVD from a package in that state ("contains no system
+    // images"), so treating the directory alone as "installed" would send
+    // it a package that looks present but silently doesn't work.
+    let image_dir = active
         .sdk
         .join("system-images")
         .join(format!("android-{system_image}"))
         .join("google_apis")
-        .join(sysimg_abi())
-        .exists()
-    {
-        println!("Installing {package} (closest match for API {api})...");
+        .join(sysimg_abi());
+    if !image_dir.join("system.img").exists() {
+        if image_dir.exists() {
+            // sdkmanager tracks "installed" by package.xml's presence — if a
+            // broken partial install left that behind, calling sdkmanager on
+            // the same package again is a silent no-op. Removing the
+            // directory first forces a real re-fetch.
+            println!("Found an incomplete {package} install — removing and re-fetching...");
+            std::fs::remove_dir_all(&image_dir)
+                .with_context(|| format!("failed to remove incomplete {}", image_dir.display()))?;
+        } else {
+            println!("Installing {package} (closest match for API {api})...");
+        }
         install::accept_licenses(&sdkmanager, &active.sdk, active.java_home.as_deref())?;
         let mut cmd = Command::new(&sdkmanager);
         cmd.arg(format!("--sdk_root={}", active.sdk.display()))
