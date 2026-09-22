@@ -1,6 +1,6 @@
 [package]
 name = "avm-plugin-android"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2021"
 description = "avm native provider for the Android SDK (cmdline-tools, platform-tools, sdkmanager). Speaks avm's plugin protocol (https://github.com/PrajaNova/avm)."
 license = "MIT"
