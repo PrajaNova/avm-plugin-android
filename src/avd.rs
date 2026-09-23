@@ -230,9 +230,55 @@ fn cmd_create(args: &[String]) -> Result<()> {
         return Err(anyhow!("avdmanager create avd failed: {status}"));
     }
 
+    fix_avd_target_api(&name, &system_image);
+
     println!("✓ Created AVD '{name}'");
     println!("  Start it with: avm android avd start {name}");
     Ok(())
+}
+
+/// avdmanager (a Java tool) parses a system image's declared API level with
+/// `Integer.parseInt`, which throws on a decimal string like `"37.0"` and
+/// silently falls back to API level `0` — writing `target=android-0` into
+/// the AVD's `.ini` file. The emulator later reads that same `target=` line
+/// to decide whether the platform is new enough (`>= 21`) to enable HVF
+/// hardware acceleration; API `0` fails that check, so it silently drops to
+/// software (TCG) emulation — which then hard-fails on Apple Silicon, since
+/// TCG's JIT needs simultaneously write+execute memory pages and macOS's
+/// W^X enforcement there refuses that outright (`mprotect: Permission
+/// denied`). None of this shows up as an error at `avd create` time — only
+/// later, when the AVD actually tries to start. Rewriting `target=` with the
+/// real major API version (parsed the same tolerant way `atoi` would, not
+/// `Integer.parseInt`'s all-or-nothing rule) fixes it at the source, for
+/// every AVD created against a decimal-versioned system image (`37.0`,
+/// `36.1`, ...), not just this one.
+fn fix_avd_target_api(name: &str, system_image: &str) {
+    let Some(major) = system_image.split('.').next() else {
+        return;
+    };
+    let Ok(home) = install::home_dir() else { return };
+    let ini_path = home.join(".android").join("avd").join(format!("{name}.ini"));
+    let Ok(contents) = std::fs::read_to_string(&ini_path) else {
+        return;
+    };
+
+    let correct_target = format!("target=android-{major}");
+    let mut changed = false;
+    let patched: Vec<String> = contents
+        .lines()
+        .map(|line| {
+            if line.starts_with("target=android-") && line != correct_target {
+                changed = true;
+                correct_target.clone()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+
+    if changed {
+        let _ = std::fs::write(&ini_path, patched.join("\n") + "\n");
+    }
 }
 
 fn parse_create_args(args: &[String]) -> Result<(Option<String>, Option<String>, Option<String>)> {
