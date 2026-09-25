@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write      # build provenance attestations (PrajaNova/avm#19)
+  attestations: write
 
 jobs:
   release:
