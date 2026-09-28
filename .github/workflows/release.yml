@@ -12,5 +12,5 @@ permissions:
 
 jobs:
   release:
-    uses: PrajaNova/avm/.github/workflows/plugin-release.yml@chore/simplify-cleanup
+    uses: PrajaNova/avm/.github/workflows/plugin-release.yml@main
     secrets: inherit
