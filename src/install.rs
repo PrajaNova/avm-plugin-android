@@ -82,14 +82,32 @@ fn has_complete_system_image(sdk: &Path) -> bool {
 }
 
 fn download_cmdline_tools(destination: &Path) -> Result<()> {
-    let url = cmdline_tools_url()?;
+    let (url, expected) = cmdline_tools_source()?;
     let max_secs = env_timeout_ms("AVM_ANDROID_CURL_TIMEOUT", DOWNLOAD_TIMEOUT_MS) / 1000;
     let mut cmd = Command::new("curl");
     cmd.args(["-fL", "--connect-timeout", "10", "--max-time", &max_secs.to_string(), &url, "-o"])
         .arg(destination)
         .stdout(Stdio::null());
     run_timed(cmd, DOWNLOAD_TIMEOUT_MS, "Android command-line tools download", "AVM_ANDROID_CURL_TIMEOUT")
-        .with_context(|| format!("failed to download {url}"))
+        .with_context(|| format!("failed to download {url}"))?;
+
+    let Some(expected) = expected else {
+        if std::env::var("AVM_ALLOW_UNVERIFIED").as_deref() == Ok("1") {
+            eprintln!("warning: installing UNVERIFIED Android cmdline-tools (AVM_ALLOW_UNVERIFIED=1)");
+            return Ok(());
+        }
+        let _ = fs::remove_file(destination);
+        return Err(anyhow!(
+            "no known sha256 for {url}; set ANDROID_CMDLINE_TOOLS_SHA256 (or AVM_ALLOW_UNVERIFIED=1 to skip)"
+        ));
+    };
+    let name = url.rsplit('/').next().unwrap_or("cmdline-tools.zip");
+    avm_plugin_api::verify_sha256(destination, &format!("{expected}  {name}"), name)
+        .map(|_| ())
+        .map_err(|e| {
+            let _ = fs::remove_file(destination);
+            e.context("refusing to install Android cmdline-tools")
+        })
 }
 
 fn extract_cmdline_tools(zip_path: &Path, tmp: &Path, sdk: &Path) -> Result<()> {
@@ -298,15 +316,30 @@ fn wrapper(bin: &Path, sdk: &Path, name: &str, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmdline_tools_url() -> Result<String> {
-    let build = std::env::var("ANDROID_CMDLINE_TOOLS_BUILD").unwrap_or_else(|_| "11076708".to_string());
+const DEFAULT_CMDLINE_TOOLS_BUILD: &str = "11076708";
+
+/// The cmdline-tools zip URL and its expected sha256. Google's repository XML
+/// only publishes sha1, so the default build's sha256 is pinned here (each
+/// cross-checked against Google's sha1 when pinned). A custom
+/// `ANDROID_CMDLINE_TOOLS_BUILD` needs `ANDROID_CMDLINE_TOOLS_SHA256` too.
+/// Everything after this bootstrap is installed by `sdkmanager`, which
+/// verifies its own packages.
+fn cmdline_tools_source() -> Result<(String, Option<String>)> {
+    let build = std::env::var("ANDROID_CMDLINE_TOOLS_BUILD").unwrap_or_else(|_| DEFAULT_CMDLINE_TOOLS_BUILD.to_string());
     let host = match std::env::consts::OS {
         "macos" => "mac",
         "linux" => "linux",
         other => return Err(anyhow!("unsupported OS for Android cmdline-tools: {other}")),
     };
-    Ok(format!(
-        "https://dl.google.com/android/repository/commandlinetools-{host}-{build}_latest.zip"
+    let pinned = match (build.as_str(), host) {
+        (DEFAULT_CMDLINE_TOOLS_BUILD, "mac") => Some("7bc5c72ba0275c80a8f19684fb92793b83a6b5c94d4d179fc5988930282d7e64"),
+        (DEFAULT_CMDLINE_TOOLS_BUILD, "linux") => Some("2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258"),
+        _ => None,
+    };
+    let expected = std::env::var("ANDROID_CMDLINE_TOOLS_SHA256").ok().or(pinned.map(str::to_string));
+    Ok((
+        format!("https://dl.google.com/android/repository/commandlinetools-{host}-{build}_latest.zip"),
+        expected,
     ))
 }
 
