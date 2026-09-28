@@ -1,16 +1,25 @@
 name: Release
 
+# Manual only: Actions → Release → Run workflow, or
+#   gh workflow run release.yml -f version=0.2.1
+# Bump `version` in Cargo.toml on main first; the shared workflow checks it,
+# then creates the v<version> tag and release. Pushing a tag does nothing.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the v, matching Cargo.toml (e.g. 0.2.1)"
+        required: true
+        type: string
 
 permissions:
   contents: write
-  id-token: write      # build provenance attestations (PrajaNova/avm#19)
+  id-token: write      # build provenance attestations
   attestations: write
 
 jobs:
   release:
     uses: PrajaNova/avm/.github/workflows/plugin-release.yml@main
+    with:
+      version: ${{ inputs.version }}
     secrets: inherit
