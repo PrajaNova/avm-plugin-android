@@ -12,7 +12,7 @@ struct AndroidProvider;
 
 impl AndroidProvider {
     fn sdkmanager_wrapper(&self, version: &str) -> Result<Option<PathBuf>> {
-        let candidate = tool_dir("android")?.join(version).join("bin").join("sdkmanager");
+        let candidate = tool_dir("android")?.join(version).join("bin").join(install::wrapper_name("sdkmanager"));
         Ok(candidate.exists().then_some(candidate))
     }
 }

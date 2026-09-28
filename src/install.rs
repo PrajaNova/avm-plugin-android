@@ -39,7 +39,7 @@ pub fn install_android(version: &str) -> Result<()> {
 
     let java_home = require_jdk()?;
 
-    if !sdk.join("cmdline-tools").join("latest").join("bin").join("sdkmanager").exists() {
+    if !sdk.join("cmdline-tools").join("latest").join("bin").join(bat("sdkmanager")).exists() {
         // Staged inside the tools dir: never counts as installed, same fs for rename.
         let tmp = tool_dir("android")?.join(format!(".tmp-{version}"));
         fs::create_dir_all(&tmp).context("failed to create android install temp dir")?;
@@ -116,8 +116,13 @@ fn extract_cmdline_tools(zip_path: &Path, tmp: &Path, sdk: &Path) -> Result<()> 
     if extracted.exists() {
         fs::remove_dir_all(&extracted).context("failed to clean previous extraction")?;
     }
-    let mut cmd = Command::new("unzip");
-    cmd.arg("-q").arg(zip_path).arg("-d").arg(tmp);
+    // Windows has no unzip; its bundled bsdtar reads zip.
+    let mut cmd = if cfg!(windows) { Command::new("tar") } else { Command::new("unzip") };
+    if cfg!(windows) {
+        cmd.arg("-xf").arg(zip_path).arg("-C").arg(tmp);
+    } else {
+        cmd.arg("-q").arg(zip_path).arg("-d").arg(tmp);
+    }
     run_timed(cmd, UNZIP_TIMEOUT_MS, "Android command-line tools extraction", "AVM_ANDROID_UNZIP_TIMEOUT")?;
 
     let dest = sdk.join("cmdline-tools").join("latest");
@@ -129,7 +134,7 @@ fn extract_cmdline_tools(zip_path: &Path, tmp: &Path, sdk: &Path) -> Result<()> 
 
 /// `sdkmanager --sdk_root=<sdk>`, pointed at `java_home` when one is needed.
 fn sdkmanager(sdk: &Path, java_home: Option<&Path>) -> Command {
-    let mut cmd = Command::new(sdk.join("cmdline-tools").join("latest").join("bin").join("sdkmanager"));
+    let mut cmd = Command::new(sdk.join("cmdline-tools").join("latest").join("bin").join(bat("sdkmanager")));
     cmd.arg(format!("--sdk_root={}", sdk.display()));
     if let Some(java_home) = java_home {
         cmd.env("JAVA_HOME", java_home);
@@ -306,15 +311,41 @@ fn write_wrappers(target: &Path, sdk: &Path) -> Result<()> {
     let bin = target.join("bin");
     fs::create_dir_all(&bin).context("failed to create android bin dir")?;
     let cmdline_bin = sdk.join("cmdline-tools").join("latest").join("bin");
-    wrapper(&bin, sdk, "adb", &sdk.join("platform-tools").join("adb"))?;
-    wrapper(&bin, sdk, "sdkmanager", &cmdline_bin.join("sdkmanager"))?;
-    wrapper(&bin, sdk, "avdmanager", &cmdline_bin.join("avdmanager"))?;
-    wrapper(&bin, sdk, "emulator", &sdk.join("emulator").join("emulator"))?;
+    wrapper(&bin, sdk, "adb", &sdk.join("platform-tools").join(exe("adb")))?;
+    wrapper(&bin, sdk, "sdkmanager", &cmdline_bin.join(bat("sdkmanager")))?;
+    wrapper(&bin, sdk, "avdmanager", &cmdline_bin.join(bat("avdmanager")))?;
+    wrapper(&bin, sdk, "emulator", &sdk.join("emulator").join(exe("emulator")))?;
     // `android` satisfies avm's is_installed marker convention and is a
     // reasonable default entry point.
-    wrapper(&bin, sdk, "android", &cmdline_bin.join("sdkmanager"))
+    wrapper(&bin, sdk, "android", &cmdline_bin.join(bat("sdkmanager")))
 }
 
+/// SDK tool file names: cmdline-tools are `.bat` and binaries `.exe` on Windows.
+fn bat(name: &str) -> String {
+    if cfg!(windows) { format!("{name}.bat") } else { name.to_string() }
+}
+
+fn exe(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// avm's wrappers in `<version>/bin`: `adb`, or `adb.cmd` on Windows.
+pub fn wrapper_name(name: &str) -> String {
+    if cfg!(windows) { format!("{name}.cmd") } else { name.to_string() }
+}
+
+#[cfg(windows)]
+fn wrapper(bin: &Path, sdk: &Path, name: &str, target: &Path) -> Result<()> {
+    let dest = bin.join(wrapper_name(name));
+    let contents = format!(
+        "@echo off\r\nset \"ANDROID_HOME={sdk}\"\r\nset \"ANDROID_SDK_ROOT={sdk}\"\r\n\"{target}\" %*\r\n",
+        sdk = sdk.display(),
+        target = target.display(),
+    );
+    fs::write(&dest, contents).with_context(|| format!("failed to write wrapper {}", dest.display()))
+}
+
+#[cfg(unix)]
 fn wrapper(bin: &Path, sdk: &Path, name: &str, target: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let dest = bin.join(name);
@@ -341,11 +372,13 @@ fn cmdline_tools_source() -> Result<(String, Option<String>)> {
     let host = match std::env::consts::OS {
         "macos" => "mac",
         "linux" => "linux",
+        "windows" => "win",
         other => return Err(anyhow!("unsupported OS for Android cmdline-tools: {other}")),
     };
     let pinned = match (build.as_str(), host) {
         (DEFAULT_CMDLINE_TOOLS_BUILD, "mac") => Some("7bc5c72ba0275c80a8f19684fb92793b83a6b5c94d4d179fc5988930282d7e64"),
         (DEFAULT_CMDLINE_TOOLS_BUILD, "linux") => Some("2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258"),
+        (DEFAULT_CMDLINE_TOOLS_BUILD, "win") => Some("4d6931209eebb1bfb7c7e8b240a6a3cb3ab24479ea294f3539429574b1eec862"),
         _ => None,
     };
     let expected = std::env::var("ANDROID_CMDLINE_TOOLS_SHA256").ok().or(pinned.map(str::to_string));
@@ -384,7 +417,7 @@ pub fn require_jdk() -> Result<Option<PathBuf>> {
 
 fn find_avm_managed_jdk() -> Option<PathBuf> {
     let java_tools = tool_dir("java").ok()?;
-    let has_java = |v: &str| java_tools.join(v).join("bin").join("java").exists();
+    let has_java = |v: &str| java_tools.join(v).join("bin").join(exe("java")).exists();
     let version = pinned_java_version()
         .filter(|v| has_java(v))
         .or_else(|| list_installed("java", has_java).ok()?.pop())?;

@@ -22,4 +22,5 @@ jobs:
     uses: PrajaNova/avm/.github/workflows/plugin-release.yml@main
     with:
       version: ${{ inputs.version }}
+      windows: true
     secrets: inherit
