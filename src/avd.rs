@@ -60,7 +60,7 @@ fn active_sdk() -> Result<ActiveSdk> {
         anyhow!("no android version selected — run `avm android use <version>` first")
     })?;
     let bin = tool_dir("android")?.join(&version).join("bin");
-    if !bin.join("avdmanager").exists() {
+    if !bin.join(install::wrapper_name("avdmanager")).exists() {
         return Err(anyhow!(
             "android {version} isn't installed — run `avm android install {version}` first"
         ));
@@ -74,7 +74,7 @@ fn active_sdk() -> Result<ActiveSdk> {
 }
 
 fn tool_command(active: &ActiveSdk, binary: &str) -> Command {
-    let mut cmd = Command::new(active.bin.join(binary));
+    let mut cmd = Command::new(active.bin.join(install::wrapper_name(binary)));
     if let Some(java_home) = &active.java_home {
         cmd.env("JAVA_HOME", java_home);
     }
