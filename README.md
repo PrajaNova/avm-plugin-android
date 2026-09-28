@@ -25,6 +25,10 @@ building/publishing this repo itself.
   `platforms;android-<level>`, matching `build-tools`, the `emulator`, and
   a matching system image, all driven through `sdkmanager` (never a manual
   download).
+- **Verified downloads** — the one direct download, the cmdline-tools
+  bootstrap zip, is checked against a pinned sha256 before extraction;
+  everything after it comes through `sdkmanager`, which verifies its own
+  packages.
 - **Automatic `ANDROID_HOME` / `ANDROID_SDK_ROOT`** — computed directly
   from the selected version, in-process, every time you run a command.
 - **Working `adb`, `sdkmanager`, `avdmanager`, `emulator`** — installing a
@@ -79,7 +83,9 @@ Useful env overrides for `install`:
 | --- | --- |
 | `ANDROID_BUILD_TOOLS_VERSION` | Force a specific build-tools version instead of the auto-resolved closest match |
 | `ANDROID_SYSTEM_IMAGE_API` | Force a specific system-image API id (e.g. `36.1`) instead of the auto-resolved closest match |
-| `ANDROID_CMDLINE_TOOLS_BUILD` | Pin a specific cmdline-tools build number if Google's default one 404s |
+| `ANDROID_CMDLINE_TOOLS_BUILD` | Pin a specific cmdline-tools build number if Google's default one 404s (also set `ANDROID_CMDLINE_TOOLS_SHA256`) |
+| `ANDROID_CMDLINE_TOOLS_SHA256` | Expected sha256 of a custom cmdline-tools build's zip |
+| `AVM_ALLOW_UNVERIFIED=1` | Install a cmdline-tools build with no known sha256 (not recommended) |
 | `AVM_ANDROID_CURL_TIMEOUT` / `AVM_ANDROID_UNZIP_TIMEOUT` / `AVM_ANDROID_SDKMANAGER_TIMEOUT` | Seconds — extend for slow links (the SDK pull is several GB) |
 
 ## Emulators (AVDs)

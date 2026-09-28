@@ -1,8 +1,8 @@
 use crate::install;
 use crate::versions;
 use anyhow::{anyhow, Context, Result};
-use avm_plugin_api::ToolVersionQuery;
-use inquire::{Select, Text};
+use avm_plugin_api::{tool_dir, ToolVersionQuery};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 
@@ -50,7 +50,8 @@ fn print_help() {
 struct ActiveSdk {
     version: String,
     sdk: PathBuf,
-    cmdline_bin: PathBuf,
+    /// avm's SDK-aware wrappers (they export ANDROID_HOME/ANDROID_SDK_ROOT).
+    bin: PathBuf,
     java_home: Option<PathBuf>,
 }
 
@@ -58,26 +59,22 @@ fn active_sdk() -> Result<ActiveSdk> {
     let version = std::env::var("AVM_RESOLVED_VERSION").map_err(|_| {
         anyhow!("no android version selected — run `avm android use <version>` first")
     })?;
-    let sdk = install::sdk_dir(&version)?;
-    let cmdline_bin = sdk.join("cmdline-tools").join("latest").join("bin");
-    if !cmdline_bin.join("avdmanager").exists() {
+    let bin = tool_dir("android")?.join(&version).join("bin");
+    if !bin.join("avdmanager").exists() {
         return Err(anyhow!(
             "android {version} isn't installed — run `avm android install {version}` first"
         ));
     }
-    let java_home = install::require_jdk()?;
     Ok(ActiveSdk {
+        sdk: install::sdk_dir(&version)?,
         version,
-        sdk,
-        cmdline_bin,
-        java_home,
+        bin,
+        java_home: install::require_jdk()?,
     })
 }
 
 fn tool_command(active: &ActiveSdk, binary: &str) -> Command {
-    let mut cmd = Command::new(active.cmdline_bin.join(binary));
-    cmd.env("ANDROID_HOME", &active.sdk);
-    cmd.env("ANDROID_SDK_ROOT", &active.sdk);
+    let mut cmd = Command::new(active.bin.join(binary));
     if let Some(java_home) = &active.java_home {
         cmd.env("JAVA_HOME", java_home);
     }
@@ -123,9 +120,7 @@ fn cmd_start(args: &[String]) -> Result<()> {
         .ok_or_else(|| anyhow!("usage: avm android avd start <name> [-- extra emulator args]"))?;
     let active = active_sdk()?;
     let extra = &args[1..];
-    let status = Command::new(active.sdk.join("emulator").join("emulator"))
-        .env("ANDROID_HOME", &active.sdk)
-        .env("ANDROID_SDK_ROOT", &active.sdk)
+    let status = tool_command(&active, "emulator")
         .arg("-avd")
         .arg(name)
         .args(extra)
@@ -148,9 +143,7 @@ fn cmd_create(args: &[String]) -> Result<()> {
 
     let name = match name {
         Some(name) => name,
-        None => Text::new("AVD name:")
-            .prompt()
-            .context("cancelled")?,
+        None => prompt("AVD name: ")?,
     };
     if name.trim().is_empty() {
         return Err(anyhow!("AVD name can't be empty"));
@@ -161,48 +154,23 @@ fn cmd_create(args: &[String]) -> Result<()> {
         None => pick_api_level()?,
     };
 
-    let sdkmanager = active.cmdline_bin.join("sdkmanager");
-    let listing = install::list_packages(&sdkmanager, &active.sdk, active.java_home.as_deref())?;
+    let java_home = active.java_home.as_deref();
+    let listing = install::list_packages(&active.sdk, java_home)?;
     let system_image = install::resolve_system_image_id(&listing, &api)?;
-    let package = format!("system-images;android-{system_image};google_apis;{}", sysimg_abi());
-
-    // `system.img` specifically, not just the package directory — sdkmanager
-    // writes package.xml (and sometimes a partial vendor.img) before the
-    // actual image, so a directory that exists but was left behind by an
-    // interrupted install still has no system.img. avdmanager refuses to
-    // create an AVD from a package in that state ("contains no system
-    // images"), so treating the directory alone as "installed" would send
-    // it a package that looks present but silently doesn't work.
-    let image_dir = active
+    let package = install::sysimg_package(&system_image);
+    // `system.img` specifically, not just the package dir: avdmanager refuses a
+    // package that an interrupted install left without one ("contains no system images").
+    let image = active
         .sdk
         .join("system-images")
         .join(format!("android-{system_image}"))
         .join("google_apis")
-        .join(sysimg_abi());
-    if !image_dir.join("system.img").exists() {
-        if image_dir.exists() {
-            // sdkmanager tracks "installed" by package.xml's presence — if a
-            // broken partial install left that behind, calling sdkmanager on
-            // the same package again is a silent no-op. Removing the
-            // directory first forces a real re-fetch.
-            println!("Found an incomplete {package} install — removing and re-fetching...");
-            std::fs::remove_dir_all(&image_dir)
-                .with_context(|| format!("failed to remove incomplete {}", image_dir.display()))?;
-        } else {
-            println!("Installing {package} (closest match for API {api})...");
-        }
-        install::accept_licenses(&sdkmanager, &active.sdk, active.java_home.as_deref())?;
-        let mut cmd = Command::new(&sdkmanager);
-        cmd.arg(format!("--sdk_root={}", active.sdk.display()))
-            .arg(&package)
-            .arg("emulator");
-        if let Some(java_home) = &active.java_home {
-            cmd.env("JAVA_HOME", java_home);
-        }
-        let status = cmd.status().context("failed to run sdkmanager")?;
-        if !status.success() {
-            return Err(anyhow!("sdkmanager failed to install {package}: {status}"));
-        }
+        .join(install::sysimg_abi())
+        .join("system.img");
+    if !image.exists() {
+        println!("Installing {package} (closest match for API {api})...");
+        install::accept_licenses(&active.sdk, java_home);
+        install::install_system_image(&active.sdk, java_home, &system_image, &[])?;
     }
 
     let device = match device {
@@ -219,7 +187,6 @@ fn cmd_create(args: &[String]) -> Result<()> {
     cmd.stdin(Stdio::piped());
     let mut child = cmd.spawn().context("failed to run avdmanager")?;
     if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
         // avdmanager asks "Do you wish to create a custom hardware profile
         // [no]" when a device (-d) wasn't given; "no" keeps the wizard
         // non-interactive from here on.
@@ -311,15 +278,33 @@ fn pick_api_level() -> Result<String> {
     if versions.is_empty() {
         return Err(anyhow!("no Android API levels available"));
     }
-    let labels: Vec<String> = versions.iter().map(|v| v.label.clone()).collect();
-    let picked = Select::new("API level for the new AVD's system image:", labels)
-        .prompt()
-        .context("cancelled")?;
-    let idx = versions
-        .iter()
-        .position(|v| v.label == picked)
-        .ok_or_else(|| anyhow!("internal error resolving picked API level"))?;
+    let labels: Vec<&str> = versions.iter().map(|v| v.label.as_str()).collect();
+    let idx = pick("API level for the new AVD's system image:", &labels)?;
     Ok(versions[idx].version.clone())
+}
+
+fn prompt(message: &str) -> Result<String> {
+    print!("{message}");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line)? == 0 {
+        return Err(anyhow!("cancelled"));
+    }
+    Ok(line.trim().to_string())
+}
+
+/// Numbered list on stdout; returns the 0-based index picked.
+fn pick(title: &str, labels: &[&str]) -> Result<usize> {
+    println!("{title}");
+    for (i, label) in labels.iter().enumerate() {
+        println!("  {:>3}) {label}", i + 1);
+    }
+    prompt(&format!("Choose 1-{}: ", labels.len()))?
+        .parse::<usize>()
+        .ok()
+        .filter(|n| (1..=labels.len()).contains(n))
+        .map(|n| n - 1)
+        .ok_or_else(|| anyhow!("invalid choice"))
 }
 
 struct DeviceProfile {
@@ -339,18 +324,12 @@ fn pick_device(active: &ActiveSdk) -> Result<Option<String>> {
         return Ok(None);
     }
 
-    let mut labels: Vec<String> = vec!["(skip — use avdmanager's default profile)".to_string()];
-    labels.extend(devices.iter().map(|d| d.label.clone()));
-    let picked = Select::new("Device profile:", labels)
-        .prompt()
-        .context("cancelled")?;
-    if picked.starts_with("(skip") {
-        return Ok(None);
-    }
-    Ok(devices
-        .iter()
-        .find(|d| d.label == picked)
-        .map(|d| d.id.clone()))
+    let mut labels = vec!["(skip — use avdmanager's default profile)"];
+    labels.extend(devices.iter().map(|d| d.label.as_str()));
+    Ok(match pick("Device profile:", &labels)? {
+        0 => None,
+        i => Some(devices[i - 1].id.clone()),
+    })
 }
 
 /// Parses `avdmanager list device`'s block format:
@@ -387,11 +366,4 @@ fn parse_device_list(text: &str) -> Vec<DeviceProfile> {
         }
     }
     devices
-}
-
-fn sysimg_abi() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "arm64-v8a",
-        _ => "x86_64",
-    }
 }
