@@ -13,6 +13,7 @@ const UNZIP_TIMEOUT_MS: u64 = 60_000;
 const SDKMANAGER_TIMEOUT_MS: u64 = 1_800_000;
 const SDKMANAGER_LIST_TIMEOUT_MS: u64 = 60_000;
 const SDKMANAGER_ENV: &str = "AVM_ANDROID_SDKMANAGER_TIMEOUT";
+const SDKMANAGER_ATTEMPTS: u32 = 3;
 
 pub fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
@@ -170,9 +171,20 @@ pub fn install_system_image(sdk: &Path, java_home: Option<&Path>, system_image: 
         fs::remove_dir_all(&image_dir)
             .with_context(|| format!("failed to remove incomplete {}", image_dir.display()))?;
     }
-    let mut cmd = sdkmanager(sdk, java_home);
-    cmd.args(extra).arg("emulator").arg(&package).stdout(Stdio::null());
-    run_timed(cmd, SDKMANAGER_TIMEOUT_MS, "sdkmanager package install", SDKMANAGER_ENV)
+    // Google's downloads fail now and then ("Error on ZipFile unknown
+    // archive"); sdkmanager re-fetches whatever is incomplete, so retry.
+    let mut attempt = 1;
+    loop {
+        let mut cmd = sdkmanager(sdk, java_home);
+        cmd.args(extra).arg("emulator").arg(&package).stdout(Stdio::null());
+        match run_timed(cmd, SDKMANAGER_TIMEOUT_MS, "sdkmanager package install", SDKMANAGER_ENV) {
+            Err(err) if attempt < SDKMANAGER_ATTEMPTS => {
+                eprintln!("sdkmanager failed ({err:#}); retrying ({attempt}/{SDKMANAGER_ATTEMPTS})...");
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
 }
 
 /// Build-tools packages are versioned independently of platform API levels
